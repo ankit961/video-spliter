@@ -1,4 +1,4 @@
-"""Full-quality final rendering."""
+"""Full-quality final rendering with fade support."""
 
 from pathlib import Path
 import subprocess
@@ -17,9 +17,11 @@ def render_final(
     preset: str = "medium",
     audio_bitrate: str = "192k",
     copy_streams: bool = False,
+    fade_in_ms: int = 0,
+    fade_out_ms: int = 0,
 ) -> Path:
     """
-    Render a full-quality final clip.
+    Render a full-quality final clip with optional fades.
     
     Args:
         input_path: Source video path
@@ -30,7 +32,9 @@ def render_final(
         crf: Quality (lower = higher quality)
         preset: Encoding speed preset
         audio_bitrate: Audio bitrate
-        copy_streams: If True, copy streams without re-encoding (faster but less precise cuts)
+        copy_streams: If True, copy streams without re-encoding
+        fade_in_ms: Audio fade-in duration in milliseconds
+        fade_out_ms: Audio fade-out duration in milliseconds
         
     Returns:
         Path to rendered clip
@@ -43,7 +47,27 @@ def render_final(
     
     logger.debug(f"Rendering final: {start_time:.2f}s - {end_time:.2f}s -> {output_path}")
     
-    if copy_streams:
+    # Build audio filter for fades
+    audio_filters = []
+    if fade_in_ms > 0:
+        fade_in_s = fade_in_ms / 1000.0
+        audio_filters.append(f"afade=t=in:st=0:d={fade_in_s}")
+    if fade_out_ms > 0:
+        fade_out_s = fade_out_ms / 1000.0
+        fade_start = duration - fade_out_s
+        audio_filters.append(f"afade=t=out:st={fade_start}:d={fade_out_s}")
+    
+    # Build video filter for fades
+    video_filters = []
+    if fade_in_ms > 0:
+        fade_in_s = fade_in_ms / 1000.0
+        video_filters.append(f"fade=t=in:st=0:d={fade_in_s}")
+    if fade_out_ms > 0:
+        fade_out_s = fade_out_ms / 1000.0
+        fade_start = duration - fade_out_s
+        video_filters.append(f"fade=t=out:st={fade_start}:d={fade_out_s}")
+    
+    if copy_streams and not audio_filters and not video_filters:
         # Fast copy mode (may have keyframe alignment issues)
         cmd = [
             "ffmpeg",
@@ -56,21 +80,35 @@ def render_final(
             str(output_path),
         ]
     else:
-        # Re-encode for precise cuts
+        # Re-encode for precise cuts and fades
         cmd = [
             "ffmpeg",
             "-y",
             "-ss", str(start_time),
             "-i", str(input_path),
             "-t", str(duration),
+        ]
+        
+        # Add video filter
+        if video_filters:
+            cmd.extend(["-vf", ",".join(video_filters)])
+        
+        cmd.extend([
             "-c:v", codec,
             "-crf", str(crf),
             "-preset", preset,
+        ])
+        
+        # Add audio filter
+        if audio_filters:
+            cmd.extend(["-af", ",".join(audio_filters)])
+        
+        cmd.extend([
             "-c:a", "aac",
             "-b:a", audio_bitrate,
             "-movflags", "+faststart",
             str(output_path),
-        ]
+        ])
     
     result = subprocess.run(
         cmd,

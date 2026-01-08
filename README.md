@@ -2,6 +2,37 @@
 
 Production-grade video segmentation using a **boundary graph + dynamic programming** approach instead of naive LLM-driven editing.
 
+## 🚀 Quick Start
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/ankit961/video-spliter.git
+cd video-spliter
+
+# 2. Create virtual environment
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+
+# 3. Install dependencies
+pip install -r requirements.txt
+
+# 4. Install ffmpeg (required)
+# macOS: brew install ffmpeg
+# Ubuntu: sudo apt install ffmpeg
+
+# 5. Run the pipeline
+python main.py your_video.mp4 --mode coverage
+```
+
+## ✨ Key Features
+
+- **Deterministic boundaries** — Shot detection + VAD + sentence endings for reliable cut points
+- **Smooth transitions** — Audio/video fades (300ms in, 400ms out) for professional results
+- **Multi-signal alignment** — Prefers cuts where shot, sentence, and speech pause align
+- **Full coverage** — DP optimization ensures 95%+ video coverage with minimal gaps
+- **Smart speech detection** — Automatically prefers transcript-based segments for singing/music content
+- **Energy-based boundaries** — Detects audio energy dips for natural cut points
+
 ## Architecture
 
 ```
@@ -12,12 +43,12 @@ Production-grade video segmentation using a **boundary graph + dynamic programmi
                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                    BOUNDARY DETECTION                            │
-│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐            │
-│  │ Silero  │  │ Whisper │  │ PyScene │  │Pyannote │            │
-│  │   VAD   │  │ Transcr.│  │ Detect  │  │ Speaker │            │
-│  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘            │
-│       │            │            │            │                   │
-│       └────────────┴────────────┴────────────┘                   │
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌───────┐ │
+│  │ Silero  │  │ Whisper │  │ PyScene │  │Pyannote │  │Energy │ │
+│  │   VAD   │  │ Transcr.│  │ Detect  │  │ Speaker │  │  Dip  │ │
+│  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘  └───┬───┘ │
+│       │            │            │            │           │      │
+│       └────────────┴────────────┴────────────┴───────────┘      │
 │                          │                                       │
 │                          ▼                                       │
 │               ┌─────────────────────┐                            │
@@ -65,7 +96,7 @@ Production-grade video segmentation using a **boundary graph + dynamic programmi
                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                        RENDER                                    │
-│           Preview (low-res) + Final (full quality)               │
+│      Preview (low-res) + Final (full quality with fades)         │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -76,12 +107,14 @@ Production-grade video segmentation using a **boundary graph + dynamic programmi
 3. **DP selection over greedy** — Globally optimal clip selection
 4. **Heuristics-first filtering** — 80%+ decisions don't need an LLM
 5. **Structured outputs** — LLM can only PASS/FAIL and shift to adjacent boundaries
+6. **Smooth transitions** — Audio/video fades prevent jarring cuts
 
 ## Installation
 
 ```bash
 # Clone repository
-cd Video_Split
+git clone https://github.com/ankit961/video-spliter.git
+cd video-spliter
 
 # Create virtual environment
 python -m venv venv
@@ -115,10 +148,10 @@ Speaker diarization requires accepting the pyannote model terms:
 ### Basic Usage
 
 ```bash
-# Full coverage mode (default)
+# Full coverage mode (default) - splits entire video into clips
 python main.py video.mp4
 
-# Highlights mode (top clips only)
+# Highlights mode - extracts best clips only
 python main.py video.mp4 --mode highlights --max-clips 5
 ```
 
@@ -168,7 +201,7 @@ python main.py video.mp4 -v
 ## Project Structure
 
 ```
-Video_Split/
+video-spliter/
 ├── main.py                      # CLI entry point
 ├── requirements.txt             # Dependencies
 ├── config/
@@ -180,11 +213,12 @@ Video_Split/
 │   │   ├── vad_silero.py        # Voice activity detection
 │   │   ├── transcript_whisper.py # Transcription + sentence ends
 │   │   ├── shot_transnet.py     # Shot boundary detection
+│   │   ├── energy_detector.py   # Audio energy dip detection
 │   │   └── speaker_pyannote.py  # Speaker turn detection
 │   ├── graph/
 │   │   ├── boundary_graph.py    # Graph data structure
 │   │   ├── candidate_edges.py   # Clip candidate generation
-│   │   └── scorer.py            # Clip scoring
+│   │   └── scorer.py            # Clip scoring with multi-signal alignment
 │   ├── optimizer/
 │   │   ├── dp_coverage.py       # DP for full coverage
 │   │   └── greedy_highlights.py # Top-k selection
@@ -193,7 +227,7 @@ Video_Split/
 │   │   └── llm_reviewer.py      # Structured LLM review
 │   ├── render/
 │   │   ├── preview.py           # Low-res preview
-│   │   └── final.py             # Full quality export
+│   │   └── final.py             # Full quality export with fades
 │   └── utils/
 │       ├── transcript.py        # Transcript data structure
 │       └── cache.py             # Pipeline caching
@@ -220,6 +254,14 @@ pipeline:
   max_clips: 10   # for highlights mode
 ```
 
+### Smooth Transitions
+
+```yaml
+render:
+  fade_in_ms: 300   # Audio/video fade in duration
+  fade_out_ms: 400  # Audio/video fade out duration
+```
+
 ### Scoring Weights
 
 ```yaml
@@ -228,6 +270,11 @@ scoring:
     shot: 1.0         # Visual cuts (highest)
     vad_pause: 0.9    # Speech pauses
     sentence_end: 0.7 # Sentence boundaries
+    energy_dip: 0.5   # Audio energy dips
+  
+  # Multi-signal alignment bonuses
+  sentence_alignment_bonus: 1.5  # Bonus for shot + sentence alignment
+  audio_abrupt_penalty: 0.5      # Penalty for cuts during speech
 ```
 
 ### LLM Settings
@@ -252,6 +299,8 @@ config = PipelineConfig(
     max_clip_duration=60.0,
     use_llm_review=True,
     output_dir=Path("output"),
+    fade_in_ms=300,     # Smooth fade in
+    fade_out_ms=400,    # Smooth fade out
 )
 
 # Create pipeline
@@ -280,13 +329,14 @@ Multiple detectors run in parallel to find potential cut points:
 - **Silero VAD**: Detects speech pauses (most reliable for talking-head content)
 - **Whisper**: Transcribes audio and detects sentence endings
 - **PySceneDetect**: Detects visual shot boundaries
+- **Energy Detector**: Finds audio energy dips for natural transitions
 - **Pyannote**: Detects speaker changes (optional)
 
 ### 2. Boundary Graph
 
 All detected boundaries are merged into a unified graph:
 
-- Nearby boundaries (< 300ms) are merged
+- Nearby boundaries (< 500ms) are merged
 - Anchor boundaries (VIDEO_START, VIDEO_END, STITCH_MARK) preserve exact timestamps
 - Multi-signal boundaries (detected by multiple methods) get bonus scores
 
@@ -326,10 +376,12 @@ Two-stage review for quality assurance:
 - Can suggest shifting to adjacent boundaries
 - Cannot suggest arbitrary timestamps
 
-### 6. Render
+### 6. Render with Smooth Transitions
 
 - Preview: Low-res (480p) for quick review
-- Final: Full quality with proper encoding
+- Final: Full quality with audio/video fades
+  - **300ms fade-in**: Smooth entry to each clip
+  - **400ms fade-out**: Gradual exit prevents jarring cuts
 
 ## Performance
 
@@ -337,6 +389,13 @@ Two-stage review for quality assurance:
 - **Optimization**: O(n·k) for candidates, O(n) for DP
 - **LLM review**: ~1-2s per clip (only for borderline clips)
 - **Render**: Depends on video length and quality settings
+
+### Example Results
+
+Tested on a 722-second kids' ABC song video:
+- **15 clips** generated
+- **98.7% coverage** of original video
+- Smooth transitions with audio/video fades
 
 ## Troubleshooting
 
@@ -371,6 +430,12 @@ detectors:
 
 - Ensure `OPENAI_API_KEY` is set
 - Try `--no-llm` to use heuristics only
+
+### Abrupt cuts
+
+- Ensure `fade_in_ms` and `fade_out_ms` are configured
+- Increase merge threshold in pipeline config
+- Enable energy detector for better cut point detection
 
 ## License
 

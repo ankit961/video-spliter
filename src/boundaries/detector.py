@@ -14,6 +14,7 @@ from .vad_silero import SileroVADDetector, VADConfig
 from .transcript_whisper import WhisperTranscriptDetector, WhisperConfig
 from .shot_transnet import TransNetV2ShotDetector, TransNetConfig
 from .speaker_pyannote import PyannoteSpeakerDetector, PyannoteConfig
+from .energy_detector import EnergyBoundaryDetector, EnergyConfig
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +27,14 @@ class DetectorConfig:
     use_transcript: bool = True
     use_shot: bool = True
     use_speaker: bool = False  # Optional, slower
+    use_energy: bool = True    # Energy-based detection for music
     
     # Detector configs
     vad_config: Optional[VADConfig] = None
     whisper_config: Optional[WhisperConfig] = None
     transnet_config: Optional[TransNetConfig] = None
     pyannote_config: Optional[PyannoteConfig] = None
+    energy_config: Optional[EnergyConfig] = None
 
 
 class UnifiedBoundaryDetector:
@@ -49,6 +52,7 @@ class UnifiedBoundaryDetector:
         self._transcript_detector = None
         self._shot_detector = None
         self._speaker_detector = None
+        self._energy_detector = None
         
         # Cached results
         self._last_transcript: Optional[TranscriptData] = None
@@ -77,6 +81,12 @@ class UnifiedBoundaryDetector:
         if self._speaker_detector is None:
             self._speaker_detector = PyannoteSpeakerDetector(self.config.pyannote_config)
         return self._speaker_detector
+    
+    @property
+    def energy_detector(self) -> EnergyBoundaryDetector:
+        if self._energy_detector is None:
+            self._energy_detector = EnergyBoundaryDetector(self.config.energy_config)
+        return self._energy_detector
     
     def detect_all(self, video_path: Path) -> BoundaryGraph:
         """
@@ -121,6 +131,16 @@ class UnifiedBoundaryDetector:
                 # Update speech segments if VAD wasn't run
                 if self._last_speech_segments is None:
                     self._last_speech_segments = transcript_data.speech_segments
+            
+            # Run energy detection (good for music content)
+            if self.config.use_energy:
+                logger.info("Running energy detection...")
+                try:
+                    energy_boundaries = self.energy_detector.detect(audio_path, graph)
+                    for b in energy_boundaries:
+                        graph.add(b)
+                except Exception as e:
+                    logger.warning(f"Energy detection failed: {e}")
             
             # Run speaker detection
             if self.config.use_speaker:

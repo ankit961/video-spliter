@@ -51,6 +51,8 @@ class PipelineConfig:
     # Render settings
     preview_resolution: str = "480p"
     render_preview_only_for_borderline: bool = True
+    fade_in_ms: int = 300   # Audio/video fade-in for smoother starts
+    fade_out_ms: int = 400  # Audio/video fade-out for smoother ends
     
     # Output
     output_dir: Path = Path("output")
@@ -64,6 +66,7 @@ class PipelineConfig:
     use_transcript: bool = True
     use_shot: bool = True
     use_speaker: bool = False
+    use_energy: bool = True  # Enable energy-based detection for music content
 
 
 @dataclass
@@ -100,6 +103,7 @@ class VideoSplitPipeline:
             use_transcript=self.config.use_transcript,
             use_shot=self.config.use_shot,
             use_speaker=self.config.use_speaker,
+            use_energy=self.config.use_energy,
         )
         self.boundary_detector = UnifiedBoundaryDetector(detector_config)
         self.scorer = ClipScorer(stitch_behavior=self.config.stitch_behavior)
@@ -146,9 +150,21 @@ class VideoSplitPipeline:
         transcript_data.build_index()
         
         # === Step 3: Create feature computer ===
-        speech_segments = self.boundary_detector.get_speech_segments()
-        if not speech_segments:
-            speech_segments = transcript_data.speech_segments
+        # Prefer transcript speech segments over VAD for music/singing content
+        # Transcript detects singing better than VAD which is speech-focused
+        vad_segments = self.boundary_detector.get_speech_segments()
+        transcript_segments = transcript_data.speech_segments
+        
+        # Use transcript if it has more speech coverage (indicates singing content)
+        vad_speech_time = sum(e - s for s, e in vad_segments) if vad_segments else 0
+        transcript_speech_time = sum(e - s for s, e in transcript_segments) if transcript_segments else 0
+        
+        if transcript_speech_time > vad_speech_time * 1.2:  # 20% more coverage
+            speech_segments = transcript_segments
+            logger.debug(f"Using transcript speech segments ({transcript_speech_time:.1f}s > VAD {vad_speech_time:.1f}s)")
+        else:
+            speech_segments = vad_segments or transcript_segments
+            
         feature_computer = ClipFeatureComputer(graph, speech_segments)
         
         # === Step 4: Select clips ===
@@ -204,8 +220,9 @@ class VideoSplitPipeline:
         graph.stitch_behavior = self.config.stitch_behavior
         
         # Finalize handles: sort, inject endpoints, merge, downsample
+        # Use 0.5s merge threshold to combine shot + audio signals that are close
         graph.finalize(
-            merge_threshold=0.3,
+            merge_threshold=0.5,
             downsample_sentence_gap=0.5,
         )
         
@@ -388,13 +405,15 @@ class VideoSplitPipeline:
                 )
                 result.preview_path = preview_path
             
-            # Final render
+            # Final render with fades for smooth transitions
             final_path = self.config.output_dir / f"clip_{i:03d}.mp4"
             render_final(
                 video_path,
                 result.clip.start,
                 result.clip.end,
                 final_path,
+                fade_in_ms=self.config.fade_in_ms,
+                fade_out_ms=self.config.fade_out_ms,
             )
             result.final_path = final_path
     
