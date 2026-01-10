@@ -8,6 +8,45 @@ from ..graph.candidate_edges import CandidateClip, generate_candidate_edges
 from ..graph.scorer import ClipScorer
 
 
+def _compute_dynamic_tail_penalty(tail_gap: float, tail_penalty_per_second: float, 
+                                  threshold_near: float = 5.0, threshold_mid: float = 15.0) -> float:
+    """
+    Compute dynamic tail penalty that scales based on proximity to video end.
+    
+    Reduces penalty for clips close to the end to encourage coverage.
+    """
+    if tail_gap < threshold_near:
+        # Very close to end: light penalty (0.15 per second)
+        return tail_gap * 0.15
+    elif tail_gap < threshold_mid:
+        # Mid distance: medium penalty (0.3 per second)
+        return threshold_near * 0.15 + (tail_gap - threshold_near) * 0.3
+    else:
+        # Far from end: standard penalty
+        return threshold_near * 0.15 + \
+               (threshold_mid - threshold_near) * 0.3 + \
+               (tail_gap - threshold_mid) * tail_penalty_per_second
+
+
+def _compute_reach_bonus(clip_end_time: float, video_duration: float, 
+                        bonus_far: float = 2.0, bonus_mid: float = 1.0) -> float:
+    """
+    Compute reach-aware bonus for clips that push coverage forward.
+    
+    Clips reaching far into the video get bonus scores.
+    """
+    if video_duration <= 0:
+        return 0.0
+    
+    reach_ratio = clip_end_time / video_duration
+    
+    if reach_ratio > 0.8:  # Reaches >80% of video
+        return bonus_far
+    elif reach_ratio > 0.6:  # Reaches 60-80% of video
+        return bonus_mid
+    return 0.0
+
+
 @dataclass
 class CoverageConfig:
     """Configuration for coverage optimization."""
@@ -25,8 +64,13 @@ class CoverageConfig:
     
     # Tail coverage enforcement
     enforce_tail_coverage: bool = True
-    tail_penalty_per_second: float = 1.0
+    tail_penalty_per_second: float = 0.3  # Reduced from 1.0 for better tail coverage
     max_tail_gap: float = 10.0
+    
+    # Dynamic tail penalty (scales based on proximity to end)
+    use_dynamic_tail_penalty: bool = True
+    tail_penalty_threshold_near: float = 5.0   # < 5s from end: light penalty
+    tail_penalty_threshold_mid: float = 15.0   # 5-15s from end: medium penalty
 
 
 @dataclass 
@@ -71,6 +115,16 @@ def optimize_coverage(
         speech_segments,
     ):
         score = scorer.score(clip)
+        
+        # Add reach-aware bonus (prefer clips that push coverage forward)
+        reach_bonus = _compute_reach_bonus(
+            clip.end,
+            video_end,
+            bonus_far=scorer.weights.tail_reach_bonus_far,
+            bonus_mid=scorer.weights.tail_reach_bonus_mid
+        )
+        score += reach_bonus
+        
         edges[clip.end_idx].append((clip, score))
     
     # === DP with backpointers ===
@@ -138,10 +192,19 @@ def optimize_coverage(
         if config.enforce_tail_coverage and tail_gap > config.max_tail_gap:
             continue
         
-        # Apply tail penalty
+        # Apply dynamic tail penalty
         adjusted_score = best_score[i]
         if config.enforce_tail_coverage and tail_gap > 0:
-            adjusted_score -= tail_gap * config.tail_penalty_per_second
+            if config.use_dynamic_tail_penalty:
+                tail_penalty = _compute_dynamic_tail_penalty(
+                    tail_gap, 
+                    config.tail_penalty_per_second,
+                    config.tail_penalty_threshold_near,
+                    config.tail_penalty_threshold_mid
+                )
+            else:
+                tail_penalty = tail_gap * config.tail_penalty_per_second
+            adjusted_score -= tail_penalty
         
         if adjusted_score > best_terminal_score:
             best_terminal_score = adjusted_score

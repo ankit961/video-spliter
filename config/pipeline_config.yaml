@@ -2,9 +2,9 @@
 pipeline:
   mode: coverage  # coverage | highlights
   
-  # Duration constraints
-  min_clip_duration: 45.0
-  max_clip_duration: 60.0
+  # Duration constraints - tighter for music/singing content
+  min_clip_duration: 40.0  # Reduced from 45 to allow more granular cuts in music
+  max_clip_duration: 55.0  # Reduced from 60 to force better break points
   
   # Coverage mode
   gap_penalty: 0.5
@@ -59,21 +59,25 @@ scoring:
   boundary_weights:
     shot: 1.0
     stitch_mark: 0.95
-    vad_pause: 0.9
+    vad_pause: 0.95          # Increased from 0.9
     speaker_turn: 0.85
-    sentence_end: 0.7
-    energy_dip: 0.5
+    sentence_end: 1.1        # Increased from 0.7 (sentence ends are ideal)
+    energy_dip: 1.05         # Increased from 0.5 (critical for music!)
   
   # Bonuses/penalties
-  multi_signal_bonus: 0.3
+  base_clip_score: 10.0      # Increased from 8.0
+  multi_signal_bonus: 0.5    # Increased from 0.3
+  shot_energy_alignment_bonus: 0.8
+  sentence_alignment_bonus: 1.5
+  audio_abrupt_penalty: 0.5
   hook_bonus: 0.5
-  silence_penalty_multiplier: 2.0
-  high_speech_density_penalty: 1.0
+  silence_penalty_multiplier: 1.0
+  high_speech_density_penalty: 0.5
   stitch_alignment_bonus: 0.5
   
   # Duration shaping
-  target_duration: 55.0
-  duration_penalty_per_second: 0.05
+  target_duration: 50.0      # Adjusted for 40-55s range
+  duration_penalty_per_second: 0.03
 
 # Render settings
 render:

@@ -13,7 +13,7 @@ from .boundary_graph import Boundary, BoundaryType, StitchBehavior
 class ScoringWeights:
     """Tunable weights for clip scoring."""
     # Base score (ensures clips have positive value for coverage)
-    base_clip_score: float = 8.0  # Increased to ensure positive scores
+    base_clip_score: float = 10.0  # Increased from 8.0 to prioritize coverage
     
     # Boundary quality by type
     boundary_type_weights: Dict[BoundaryType, float] = None
@@ -45,15 +45,19 @@ class ScoringWeights:
     # Audio-abrupt cut penalty (visual-only cuts are jarring for music content)
     audio_abrupt_penalty: float = 0.5  # Reduced penalty for cuts with no audio signal
     
+    # Reach-aware bonuses (prefer clips that push coverage forward)
+    tail_reach_bonus_far: float = 2.0      # Clips reaching >80% of video
+    tail_reach_bonus_mid: float = 1.0      # Clips reaching 60-80% of video
+    
     def __post_init__(self):
         if self.boundary_type_weights is None:
             self.boundary_type_weights = {
                 BoundaryType.SHOT: 1.0,
                 BoundaryType.STITCH_MARK: 0.95,
-                BoundaryType.VAD_PAUSE: 0.9,
+                BoundaryType.VAD_PAUSE: 0.95,    # Increased from 0.9: pauses are better than shots alone
                 BoundaryType.SPEAKER_TURN: 0.85,
-                BoundaryType.SENTENCE_END: 1.1,  # Increased: sentence ends are ideal cuts
-                BoundaryType.ENERGY_DIP: 0.65,   # Energy dips for music
+                BoundaryType.SENTENCE_END: 1.1,  # Sentence ends are ideal cuts (but rare in singing)
+                BoundaryType.ENERGY_DIP: 1.05,   # Increased from 0.65: music content needs energy signals
                 BoundaryType.VIDEO_START: 0.8,
                 BoundaryType.VIDEO_END: 0.8,
             }
@@ -199,13 +203,18 @@ class ClipScorer:
         # === Sentence + pause (clean audio cut) ===
         elif has_sentence and has_vad_pause:
             best_score += w.shot_energy_alignment_bonus * 1.0
-        # === Shot + energy/pause (visual transition with quiet moment) ===
+        # === Shot + energy (visual transition with energy dip - good for music) ===
         elif has_shot and has_energy:
-            best_score += w.shot_energy_alignment_bonus
-        elif has_shot and has_vad_pause:
-            best_score += w.shot_energy_alignment_bonus * 0.7
+            best_score += w.shot_energy_alignment_bonus * 1.1  # Increased from 1.0
+        # === Energy + pause (audio-only cut - good for singing) ===
         elif has_energy and has_vad_pause:
-            best_score += w.shot_energy_alignment_bonus * 0.5
+            best_score += w.shot_energy_alignment_bonus * 0.9  # Increased from 0.5
+        # === Shot alone (less ideal than audio signals) ===
+        elif has_shot and not has_vad_pause and not has_energy and not has_sentence:
+            best_score += 0.3  # Penalize visual-only cuts in singing sections
+        # === Energy dip alone (good for music/singing) ===
+        elif has_energy and not has_shot:
+            best_score += w.shot_energy_alignment_bonus * 0.8
         
         return best_score
     
